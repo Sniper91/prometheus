@@ -60,7 +60,6 @@ const (
 
 // DefaultSDConfig is the default CVM SD configuration.
 var DefaultSDConfig = SDConfig{
-	Port:            80,
 	RefreshInterval: model.Duration(60 * time.Second),
 }
 
@@ -78,7 +77,8 @@ type Filter struct {
 type SDConfig struct {
 	Endpoint        string         `yaml:"endpoint,omitempty"`
 	Region          string         `yaml:"region,omitempty"`
-	Port            int            `yaml:"port"`
+	Port            int            `yaml:"port,omitempty"`
+	Ports           []int          `yaml:"ports,omitempty"`
 	RefreshInterval model.Duration `yaml:"refresh_interval,omitempty"`
 	Filters         []*Filter      `yaml:"filters"`
 
@@ -204,7 +204,7 @@ func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
 			if len(inst.PrivateIpAddresses) == 0 {
 				continue
 			}
-			tg.Targets = append(tg.Targets, d.extractLabels(inst))
+			tg.Targets = append(tg.Targets, d.extractLabels(inst)...)
 		}
 
 		if len(resp.Response.InstanceSet) < DefaultPageLimit {
@@ -215,12 +215,10 @@ func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
 	return []*targetgroup.Group{tg}, nil
 }
 
-func (d *Discovery) extractLabels(inst *cvm.Instance) model.LabelSet {
+func (d *Discovery) extractLabels(inst *cvm.Instance) []model.LabelSet {
 	labels := model.LabelSet{
 		cvmLabelInstanceID: strPtrToLabelValue(inst.InstanceId),
 	}
-	addr := net.JoinHostPort(*inst.PrivateIpAddresses[0], fmt.Sprintf("%d", d.conf.Port))
-	labels[model.AddressLabel] = model.LabelValue(addr)
 	if inst.Placement != nil {
 		labels[cvmLabelZone] = strPtrToLabelValue(inst.Placement.Zone)
 		labels[cvmLabelProjectID] = intPrtToLabelValue(inst.Placement.ProjectId)
@@ -242,16 +240,31 @@ func (d *Discovery) extractLabels(inst *cvm.Instance) model.LabelSet {
 
 	for _, tag := range inst.Tags {
 		labelName := model.LabelName(*tag.Key)
-		labels[cvmLabelTag+labelName] = strPtrToLabelValue(tag.Value)
 		// if key is not valid as label name, encode it to keep all information
 		if !labelName.IsValid() {
 			tagEncoded := strings.ReplaceAll(base32.StdEncoding.EncodeToString([]byte(*tag.Key)), "=", "")
 			labels[cvmLabelTag+model.LabelName(tagEncoded)] = strPtrToLabelValue(tag.Value)
+		} else {
+			labels[cvmLabelTag+labelName] = strPtrToLabelValue(tag.Value)
 		}
 	}
 
 	labels[cvmLabelOsName] = strPtrToLabelValue(inst.OsName)
-	return labels
+	labelSets := make([]model.LabelSet, 0)
+	if len(d.conf.Ports) == 0 {
+		addr := net.JoinHostPort(*inst.PrivateIpAddresses[0], fmt.Sprintf("%d", d.conf.Port))
+		labels[model.AddressLabel] = model.LabelValue(addr)
+		labelSets = append(labelSets, labels)
+	} else {
+		for _, port := range d.conf.Ports {
+			lbs := labels.Clone()
+			addr := net.JoinHostPort(*inst.PrivateIpAddresses[0], fmt.Sprintf("%d", port))
+			lbs[model.AddressLabel] = model.LabelValue(addr)
+			labelSets = append(labelSets, lbs)
+		}
+	}
+
+	return labelSets
 }
 
 func strPtrSliceToLabelValue(slice []*string, takeOne bool) model.LabelValue {
