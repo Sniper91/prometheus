@@ -148,7 +148,7 @@ func NewEndpointSlice(l log.Logger, eps cache.SharedIndexInformer, svc, pod, nod
 			DeleteFunc: func(o interface{}) {
 				nodeName, err := nodeName(o)
 				if err != nil {
-					l.Error("Error getting Node name", "err", err)
+					level.Error(l).Log("msg", "Error getting Node name", "err", err)
 				}
 				e.enqueueNode(nodeName)
 			},
